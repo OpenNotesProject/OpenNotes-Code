@@ -1,0 +1,426 @@
+/* -------------------------
+   CONFIG: set your repo here
+   ------------------------- */
+const CONFIG = {
+  owner: "OpenNotesProject",
+  repo: "Notes",
+  branch: "main",
+  rootPath: "" // e.g. "notes"
+};
+
+/* -------------------------
+   STATE & ELEMENTS
+   ------------------------- */
+const state = { tree: null, notesIndex: [], currentNote: null };
+const subjectsDropdown = document.getElementById('subjectsDropdown');
+const noteTitleEl = document.getElementById('noteTitle');
+const noteContentEl = document.getElementById('noteContent');
+const noteTopicEl = document.getElementById('noteTopic');
+const noteInfoEl = document.getElementById('noteInfo');
+const currentPathEl = document.getElementById('currentPath');
+const statusEl = document.getElementById('status');
+const searchInput = document.getElementById('globalSearch');
+const searchResultsEl = document.getElementById('searchResults');
+const shareBtn = document.getElementById('shareBtn');
+const breadcrumbsEl = document.getElementById('breadcrumbs');
+const recentListEl = document.getElementById('recentList');
+
+/* -------------------------
+   Initialize mermaid
+   ------------------------- */
+if(window.mermaid){
+  try{
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      flowchart: { curve: 'basis' }
+    });
+  }catch(e){
+    console.warn('Mermaid init failed', e);
+  }
+}
+
+/* -------------------------
+   URL helpers
+   ------------------------- */
+function setURL(path){
+  const url = new URL(window.location);
+  url.searchParams.set('note', path);
+  window.history.replaceState({}, '', url);
+}
+function getURLNote(){
+  const url = new URL(window.location);
+  return url.searchParams.get('note');
+}
+
+/* -------------------------
+   GitHub helpers
+   ------------------------- */
+function ghContentsUrl(path=''){
+  const base = `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents`;
+  const full = CONFIG.rootPath ? `${CONFIG.rootPath}/${path}` : path;
+  const encoded = full ? '/' + encodeURIComponent(full).replace(/%2F/g,'/') : '';
+  return `${base}${encoded}?ref=${CONFIG.branch}`;
+}
+function ghRawUrl(path){
+  const full = CONFIG.rootPath ? `${CONFIG.rootPath}/${path}` : path;
+  return `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${full}`;
+}
+
+/* -------------------------
+   Fetch tree recursively
+   ------------------------- */
+async function fetchTree(path=''){
+  const res = await fetch(ghContentsUrl(path));
+  if(!res.ok) throw new Error('GitHub fetch failed: ' + res.status);
+  const items = await res.json();
+  const folders = {};
+  const files = [];
+  for(const item of items){
+    if(item.type === 'dir'){
+      folders[item.name] = await fetchTree(path ? `${path}/${item.name}` : item.name);
+    } else if(item.type === 'file' && item.name.toLowerCase().endsWith('.md')){
+      files.push({ name: item.name, path: path ? `${path}/${item.name}` : item.name });
+    }
+  }
+  return { folders, files };
+}
+
+/* -------------------------
+   Render branch (recursive)
+   supports unlimited depth, smooth expand/collapse
+   ------------------------- */
+function renderBranch(node, container, depth = 0, basePath = ''){
+  const folderNames = Object.keys(node.folders).sort();
+  folderNames.forEach(folder => {
+    const folderWrap = document.createElement('div');
+    folderWrap.className = 'branch';
+    folderWrap.dataset.path = basePath ? `${basePath}/${folder}` : folder;
+
+    const title = document.createElement('div');
+    title.className = 'branch-title';
+    title.style.paddingLeft = `${depth * 6}px`;
+    title.innerHTML = `📁 ${folder}`;
+    folderWrap.appendChild(title);
+
+    const children = document.createElement('div');
+    children.className = 'branch-children';
+    folderWrap.appendChild(children);
+
+    title.addEventListener('click', () => {
+      const open = children.classList.toggle('open');
+      collapseSiblings(children, folderWrap.parentElement);
+    });
+
+    container.appendChild(folderWrap);
+    renderBranch(node.folders[folder], children, depth + 1, folderWrap.dataset.path);
+  });
+
+  node.files.sort((a,b)=>a.name.localeCompare(b.name)).forEach(file => {
+    const fileEl = document.createElement('div');
+    fileEl.className = 'note-link';
+    fileEl.style.paddingLeft = `${depth * 6}px`;
+    fileEl.textContent = file.name.replace(/\.md$/,'');
+    fileEl.dataset.path = file.path;
+    fileEl.addEventListener('click', () => loadNote(file.path));
+    container.appendChild(fileEl);
+  });
+}
+
+/* collapse siblings helper */
+function collapseSiblings(currentChildren, parent){
+  if(!parent) return;
+  parent.querySelectorAll('.branch-children').forEach(ch => {
+    if(ch !== currentChildren) ch.classList.remove('open');
+  });
+}
+
+/* -------------------------
+   Render subjects (top-level)
+   ------------------------- */
+function renderSubjects(tree){
+  subjectsDropdown.innerHTML = `<div class="subject-header">Subjects</div>`;
+  const topFolders = Object.keys(tree.folders).sort();
+  topFolders.forEach((subject, idx) => {
+    const branch = document.createElement('div');
+    branch.className = 'branch';
+    const title = document.createElement('div');
+    title.className = 'branch-title';
+    title.innerHTML = `📁 ${subject}`;
+    branch.appendChild(title);
+
+    const children = document.createElement('div');
+    children.className = 'branch-children';
+    branch.appendChild(children);
+
+    title.addEventListener('click', () => {
+      const open = children.classList.toggle('open');
+      collapseSiblings(children, subjectsDropdown);
+    });
+
+    subjectsDropdown.appendChild(branch);
+    renderBranch(state.tree.folders[subject], children, 0, subject);
+
+    if(idx === 0) children.classList.add('open');
+  });
+}
+
+/* -------------------------
+   Load note, update UI, breadcrumbs, recent
+   ------------------------- */
+async function loadNote(path){
+  try{
+    statusEl.textContent = 'Loading…';
+    const res = await fetch(ghRawUrl(path));
+    if(!res.ok) throw new Error('Failed to load note');
+    const text = await res.text();
+
+    const title = path.split('/').pop().replace(/\.md$/,'');
+    const topic = path.split('/')[0] || 'Notes';
+
+    noteTitleEl.textContent = title;
+    noteTopicEl.textContent = topic;
+    noteInfoEl.textContent = path;
+    currentPathEl.textContent = path;
+    noteContentEl.innerHTML = marked.parse(text);
+
+    state.currentNote = { path, title, content: text };
+
+    setURL(path);
+    updateBreadcrumbs(path);
+    addRecent(path);
+
+    // render mermaid diagrams inside the rendered markdown
+    await renderAllMermaid();
+
+    statusEl.textContent = 'Loaded';
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Error loading note';
+  }
+}
+
+/* -------------------------
+   Mermaid rendering
+   - finds <pre><code class="language-mermaid">...</code></pre>
+   - replaces with rendered SVG using mermaid.mermaidAPI.render
+   ------------------------- */
+let mermaidIdCounter = 0;
+async function renderAllMermaid(){
+  if(!window.mermaid || !mermaid.mermaidAPI) return;
+  const codeBlocks = noteContentEl.querySelectorAll('pre code.language-mermaid, code.language-mermaid');
+  for(const codeEl of codeBlocks){
+    const raw = codeEl.textContent || codeEl.innerText;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'mermaid-svg';
+    const id = 'mermaid-' + (++mermaidIdCounter);
+    try{
+      // mermaid.mermaidAPI.render returns svg string
+      const svg = mermaid.mermaidAPI.render(id, raw);
+      wrapper.innerHTML = svg;
+      // replace the parent <pre> if exists, else replace codeEl
+      const pre = codeEl.closest('pre');
+      if(pre) pre.parentNode.replaceChild(wrapper, pre);
+      else codeEl.parentNode.replaceChild(wrapper, codeEl);
+    }catch(e){
+      // if rendering fails, keep the code block and show error note
+      const errNote = document.createElement('div');
+      errNote.style.color = 'crimson';
+      errNote.style.fontSize = '0.9rem';
+      errNote.style.marginTop = '0.4rem';
+      errNote.textContent = 'Mermaid render error: ' + (e && e.message ? e.message : 'invalid diagram');
+      const pre = codeEl.closest('pre');
+      if(pre) pre.parentNode.insertBefore(errNote, pre.nextSibling);
+      else codeEl.parentNode.insertBefore(errNote, codeEl.nextSibling);
+      console.warn('Mermaid render failed', e);
+    }
+  }
+}
+
+/* -------------------------
+   Breadcrumbs
+   ------------------------- */
+function updateBreadcrumbs(path){
+  if(!path){
+    breadcrumbsEl.style.display = 'none';
+    return;
+  }
+  breadcrumbsEl.style.display = 'flex';
+  breadcrumbsEl.innerHTML = '';
+  const parts = path.split('/');
+  let accum = [];
+  parts.forEach((p, i) => {
+    accum.push(p);
+    const seg = accum.join('/');
+    const label = p.replace(/\.md$/,'');
+    const a = document.createElement('a');
+    a.textContent = label;
+    a.href = 'javascript:void(0)';
+    a.addEventListener('click', () => {
+      expandPath(seg);
+      if(seg.toLowerCase().endsWith('.md')) loadNote(seg);
+    });
+    breadcrumbsEl.appendChild(a);
+    if(i < parts.length - 1){
+      const sep = document.createElement('span');
+      sep.className = 'sep';
+      sep.textContent = '›';
+      breadcrumbsEl.appendChild(sep);
+    }
+  });
+}
+
+/* Expand sidebar nodes matching a path (open branches along path) */
+function expandPath(path){
+  const segments = path.split('/');
+  let current = '';
+  segments.forEach((seg, idx) => {
+    current = current ? `${current}/${seg}` : seg;
+    const branch = document.querySelector(`.branch[data-path="${current}"]`);
+    if(branch){
+      const children = branch.querySelector('.branch-children');
+      if(children) children.classList.add('open');
+    }
+  });
+  document.querySelectorAll('.branch-children').forEach(ch => {
+    const parentBranch = ch.parentElement;
+    if(parentBranch && parentBranch.dataset.path){
+      const p = parentBranch.dataset.path;
+      if(!path.startsWith(p)) ch.classList.remove('open');
+    }
+  });
+}
+
+/* -------------------------
+   Recent notes (localStorage)
+   ------------------------- */
+const RECENT_KEY = 'opennotes_recent';
+function getRecent(){
+  try{ const raw = localStorage.getItem(RECENT_KEY); return raw ? JSON.parse(raw) : []; }catch{ return []; }
+}
+function saveRecent(list){ try{ localStorage.setItem(RECENT_KEY, JSON.stringify(list)); }catch{} }
+function addRecent(path){
+  if(!path) return;
+  const list = getRecent().filter(p => p !== path);
+  list.unshift(path);
+  if(list.length > 12) list.length = 12;
+  saveRecent(list);
+  renderRecent();
+}
+function renderRecent(){
+  const list = getRecent();
+  recentListEl.innerHTML = '';
+  if(!list.length){
+    recentListEl.innerHTML = '<div style="color:var(--muted)">No recent notes yet — open a note to add it here.</div>';
+    return;
+  }
+  list.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'recent-item';
+    el.textContent = p;
+    el.addEventListener('click', () => loadNote(p));
+    recentListEl.appendChild(el);
+  });
+}
+
+/* -------------------------
+   Build search index (loads all notes once)
+   ------------------------- */
+async function buildIndex(node){
+  for(const file of node.files){
+    try{
+      const res = await fetch(ghRawUrl(file.path));
+      if(!res.ok) continue;
+      const text = await res.text();
+      state.notesIndex.push({ path: file.path, title: file.name.replace(/\.md$/,''), content: text.toLowerCase() });
+    }catch(e){
+      console.warn('Index fetch failed for', file.path);
+    }
+  }
+  for(const folder in node.folders){
+    await buildIndex(node.folders[folder]);
+  }
+}
+
+/* -------------------------
+   Search UI
+   ------------------------- */
+function runSearch(q){
+  q = q.toLowerCase().trim();
+  if(!q){ searchResultsEl.style.display = 'none'; searchResultsEl.innerHTML = ''; return; }
+  const results = state.notesIndex.filter(n => n.title.toLowerCase().includes(q) || n.content.includes(q)).slice(0,50);
+  searchResultsEl.innerHTML = '';
+  if(!results.length){
+    const none = document.createElement('div'); none.className = 'search-result-item'; none.textContent = `No results for "${q}"`; searchResultsEl.appendChild(none);
+    searchResultsEl.style.display = 'block'; return;
+  }
+  results.forEach(r => {
+    const item = document.createElement('div');
+    item.className = 'search-result-item';
+    item.textContent = r.path;
+    item.addEventListener('click', () => { searchResultsEl.style.display = 'none'; loadNote(r.path); });
+    searchResultsEl.appendChild(item);
+  });
+  searchResultsEl.style.display = 'block';
+}
+
+/* -------------------------
+   Keyboard shortcuts & events
+   ------------------------- */
+document.addEventListener('keydown', e => {
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'){ e.preventDefault(); searchInput.focus(); }
+  if(e.key.toLowerCase() === 'n' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA'){ e.preventDefault(); createNotePlaceholder(); }
+});
+searchInput.addEventListener('input', e => runSearch(e.target.value));
+searchInput.addEventListener('blur', () => setTimeout(()=>{ searchResultsEl.style.display='none'; }, 150));
+
+/* -------------------------
+   Share button
+   ------------------------- */
+shareBtn.addEventListener('click', () => {
+  if(!state.currentNote) return;
+  const url = window.location.href;
+  navigator.clipboard.writeText(url).then(() => {
+    const prev = statusEl.textContent;
+    statusEl.textContent = 'Link copied!';
+    setTimeout(()=> statusEl.textContent = prev, 1400);
+  });
+});
+
+/* -------------------------
+   Placeholder create note (hook)
+   ------------------------- */
+function createNotePlaceholder(){
+  alert('Create note flow — integrate your editor here.');
+}
+
+/* -------------------------
+   Init: fetch tree, render, index, load URL note or show recent
+   ------------------------- */
+(async function init(){
+  try{
+    statusEl.textContent = 'Fetching vault…';
+    const tree = await fetchTree('');
+    state.tree = tree;
+    renderSubjects(tree);
+
+    statusEl.textContent = 'Indexing notes…';
+    await buildIndex(tree);
+    statusEl.textContent = `Ready · ${state.notesIndex.length} notes indexed`;
+
+    renderRecent();
+
+    const urlNote = getURLNote();
+    if(urlNote){
+      expandPath(urlNote);
+      await loadNote(urlNote);
+    } else {
+      currentPathEl.textContent = 'Recent';
+    }
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Error loading vault';
+    noteContentEl.innerHTML = `<p style="color:var(--muted)">Could not load repository. Check CONFIG and that the repo is public.</p>`;
+  }
+})();
