@@ -167,6 +167,44 @@ function renderSubjects(tree){
 }
 
 /* -------------------------
+   Process callouts (Obsidian-style > [!TYPE])
+   Converts blockquotes starting with [!TYPE] into styled callout divs
+   ------------------------- */
+function processCallouts(container){
+  const blockquotes = container.querySelectorAll('blockquote');
+  blockquotes.forEach(bq => {
+    const firstChild = bq.firstChild;
+    if(!firstChild) return;
+    const text = firstChild.textContent || '';
+    const match = text.match(/^\[!(NOTE|WARNING|DANGER|ERROR|TIP|HINT|EXAMPLE|QUOTE|INFO|ABSTRACT|SUMMARY|BUG|FAILURE|SUCCESS)\]/i);
+    if(!match) return;
+    
+    const type = match[1].toLowerCase();
+    const calloutDiv = document.createElement('div');
+    calloutDiv.className = `callout ${type}`;
+    
+    // Icons for each type
+    const icons = {
+      note: '📝', warning: '⚠️', danger: '🚨', error: '❌', tip: '💡', hint: '💡',
+      example: '📋', quote: '💬', info: 'ℹ️', abstract: '📋', summary: '📋',
+      bug: '🐛', failure: '❌', success: '✅'
+    };
+    
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'callout-title';
+    titleDiv.innerHTML = `<span class="callout-icon">${icons[type] || '📌'}</span><span>${type.charAt(0).toUpperCase() + type.slice(1)}</span>`;
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'callout-content';
+    contentDiv.innerHTML = bq.innerHTML.replace(/^\[!.*?\]\n?/, '');
+    
+    calloutDiv.appendChild(titleDiv);
+    calloutDiv.appendChild(contentDiv);
+    bq.parentNode.replaceChild(calloutDiv, bq);
+  });
+}
+
+/* -------------------------
    Load note, update UI, breadcrumbs, recent
    ------------------------- */
 async function loadNote(path){
@@ -184,6 +222,9 @@ async function loadNote(path){
     noteInfoEl.textContent = path;
     currentPathEl.textContent = path;
     noteContentEl.innerHTML = marked.parse(text);
+
+    // Process callouts (Obsidian-style > [!TYPE])
+    processCallouts(noteContentEl);
 
     // Render LaTeX (KaTeX auto-render) if available. Delimiters: $$...$$ (display) and $...$ (inline)
     try{

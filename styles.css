@@ -151,6 +151,47 @@ body{
 .sidebar::-webkit-scrollbar,.note-view-wrap::-webkit-scrollbar,.search-results::-webkit-scrollbar{width:8px}
 .sidebar::-webkit-scrollbar-thumb,.note-view-wrap::-webkit-scrollbar-thumb,.search-results::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.12);border-radius:999px}
 
+/* Callouts (Obsidian-style) */
+.callout{
+  margin:1rem 0;padding:0.75rem 1rem;border-left:4px solid;border-radius:6px;background:#f5f5f5;
+}
+.callout-title{font-weight:700;margin-bottom:0.3rem;display:flex;gap:0.5rem;align-items:center}
+.callout-icon{font-size:1.1em}
+.callout-content{font-size:0.95rem;line-height:1.5}
+
+.callout.note{border-left-color:#447fd5;background:rgba(68,127,213,0.08)}
+.callout.note .callout-title{color:#447fd5}
+
+.callout.warning{border-left-color:#d9a500;background:rgba(217,165,0,0.08)}
+.callout.warning .callout-title{color:#d9a500}
+
+.callout.danger,.callout.error{border-left-color:#e13c3c;background:rgba(225,60,60,0.08)}
+.callout.danger .callout-title,.callout.error .callout-title{color:#e13c3c}
+
+.callout.tip,.callout.hint{border-left-color:#10b981;background:rgba(16,185,129,0.08)}
+.callout.tip .callout-title,.callout.hint .callout-title{color:#10b981}
+
+.callout.example{border-left-color:#a78bfa;background:rgba(167,139,250,0.08)}
+.callout.example .callout-title{color:#a78bfa}
+
+.callout.quote{border-left-color:#6b7280;background:rgba(107,114,128,0.08);font-style:italic}
+.callout.quote .callout-title{color:#6b7280}
+
+.callout.info{border-left-color:#06b6d4;background:rgba(6,182,212,0.08)}
+.callout.info .callout-title{color:#06b6d4}
+
+.callout.abstract,.callout.summary{border-left-color:#0891b2;background:rgba(8,145,178,0.08)}
+.callout.abstract .callout-title,.callout.summary .callout-title{color:#0891b2}
+
+.callout.bug{border-left-color:#dc2626;background:rgba(220,38,38,0.08)}
+.callout.bug .callout-title{color:#dc2626}
+
+.callout.failure{border-left-color:#f97316;background:rgba(249,115,22,0.08)}
+.callout.failure .callout-title{color:#f97316}
+
+.callout.success{border-left-color:#059669;background:rgba(5,150,105,0.08)}
+.callout.success .callout-title{color:#059669}
+
 /* Responsive */
 @media (max-width:980px){
   .app{grid-template-columns:1fr}
