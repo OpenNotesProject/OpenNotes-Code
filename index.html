@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Open Notes — Study Vault</title>
+<title>Open Notes</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;500;700;800&family=Source+Code+Pro:wght@400;600&display=swap" rel="stylesheet">
 
@@ -123,7 +123,7 @@ body{
 #shareBtn{background:var(--accent);border:none;padding:0.4rem 0.7rem;border-radius:8px;color:white;font-weight:700;cursor:pointer}
 
 /* Note view */
-.note-view-wrap{flex:1;overflow:auto;padding:0.6rem}
+.note-view-wrap{flex:1;overflow:auto;padding:0.6rem;position:relative}
 .note-card{
   background:var(--panel);border-radius:12px;padding:1.2rem;border:2px solid var(--accent);box-shadow:0 12px 30px rgba(0,0,0,0.06);position:relative;
 }
@@ -137,6 +137,9 @@ body{
 .markdown h1,h2,h3{margin-top:1rem;margin-bottom:0.4rem;color:#333}
 .markdown code{font-family:var(--mono);background:var(--panel-soft);padding:0.12rem 0.28rem;border-radius:6px;border:1px solid var(--border)}
 .markdown pre{background:var(--panel-soft);padding:0.7rem;border-radius:8px;border:1px solid var(--border);overflow:auto}
+
+/* Mermaid container styling */
+.mermaid-svg { margin: 0.6rem 0; max-width:100%; overflow:auto; }
 
 /* Breadcrumbs */
 .breadcrumbs{display:flex;gap:0.4rem;align-items:center;font-size:0.9rem;color:var(--muted);margin-bottom:0.6rem}
@@ -180,7 +183,7 @@ body{
 
     <div class="search-bar" role="search" aria-label="Search notes">
       <input id="globalSearch" placeholder="Search notes…" aria-label="Search notes" />
-      <span class="kbd"></span>
+      <span class="kbd">Ctrl/Cmd K</span>
     </div>
 
     <div class="subjects-dropdown" id="subjectsDropdown" aria-label="Subjects">
@@ -211,10 +214,9 @@ body{
           <div id="noteInfo" style="color:var(--muted)">Select a note from the sidebar</div>
         </div>
 
-        <h1 class="note-title" id="noteTitle">Welcome to OpenNotes!</h1>
+        <h1 class="note-title" id="noteTitle">Welcome to Open Notes</h1>
 
         <div class="markdown" id="noteContent">
-        
           <p>This vault reads <code>.md</code> files from a GitHub repo and renders them in a clean, Obsidian-style workspace.</p>
           <p>Structure your repo like:</p>
           <pre><code>science/
@@ -226,7 +228,7 @@ body{
 maths/
   calculus.md
 </code></pre>
-          <p>If no note is selected, recent notes appear below for quick access.</p>
+          <p>If no note is selected, here are some you have viewed recently!</p>
 
           <div id="recentSection" style="margin-top:1rem;">
             <h3 style="margin:0 0 0.6rem 0; color:var(--muted)">Recent notes</h3>
@@ -240,7 +242,11 @@ maths/
   </main>
 </div>
 
+<!-- marked for markdown rendering -->
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- mermaid (UMD) -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+
 <script>
 /* -------------------------
    CONFIG: set your repo here
@@ -268,7 +274,22 @@ const searchResultsEl = document.getElementById('searchResults');
 const shareBtn = document.getElementById('shareBtn');
 const breadcrumbsEl = document.getElementById('breadcrumbs');
 const recentListEl = document.getElementById('recentList');
-const recentSection = document.getElementById('recentSection');
+
+/* -------------------------
+   Initialize mermaid
+   ------------------------- */
+if(window.mermaid){
+  try{
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      flowchart: { curve: 'basis' }
+    });
+  }catch(e){
+    console.warn('Mermaid init failed', e);
+  }
+}
 
 /* -------------------------
    URL helpers
@@ -321,7 +342,6 @@ async function fetchTree(path=''){
    supports unlimited depth, smooth expand/collapse
    ------------------------- */
 function renderBranch(node, container, depth = 0, basePath = ''){
-  // folders first
   const folderNames = Object.keys(node.folders).sort();
   folderNames.forEach(folder => {
     const folderWrap = document.createElement('div');
@@ -340,16 +360,13 @@ function renderBranch(node, container, depth = 0, basePath = ''){
 
     title.addEventListener('click', () => {
       const open = children.classList.toggle('open');
-      // collapse others at same level for tidy view
       collapseSiblings(children, folderWrap.parentElement);
-      // smooth: if opening, ensure max-height large enough (CSS handles)
     });
 
     container.appendChild(folderWrap);
     renderBranch(node.folders[folder], children, depth + 1, folderWrap.dataset.path);
   });
 
-  // then files
   node.files.sort((a,b)=>a.name.localeCompare(b.name)).forEach(file => {
     const fileEl = document.createElement('div');
     fileEl.className = 'note-link';
@@ -395,7 +412,6 @@ function renderSubjects(tree){
     subjectsDropdown.appendChild(branch);
     renderBranch(state.tree.folders[subject], children, 0, subject);
 
-    // open first subject by default
     if(idx === 0) children.classList.add('open');
   });
 }
@@ -425,6 +441,9 @@ async function loadNote(path){
     updateBreadcrumbs(path);
     addRecent(path);
 
+    // render mermaid diagrams inside the rendered markdown
+    await renderAllMermaid();
+
     statusEl.textContent = 'Loaded';
   }catch(err){
     console.error(err);
@@ -433,8 +452,44 @@ async function loadNote(path){
 }
 
 /* -------------------------
+   Mermaid rendering
+   - finds <pre><code class="language-mermaid">...</code></pre>
+   - replaces with rendered SVG using mermaid.mermaidAPI.render
+   ------------------------- */
+let mermaidIdCounter = 0;
+async function renderAllMermaid(){
+  if(!window.mermaid || !mermaid.mermaidAPI) return;
+  const codeBlocks = noteContentEl.querySelectorAll('pre code.language-mermaid, code.language-mermaid');
+  for(const codeEl of codeBlocks){
+    const raw = codeEl.textContent || codeEl.innerText;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'mermaid-svg';
+    const id = 'mermaid-' + (++mermaidIdCounter);
+    try{
+      // mermaid.mermaidAPI.render returns svg string
+      const svg = mermaid.mermaidAPI.render(id, raw);
+      wrapper.innerHTML = svg;
+      // replace the parent <pre> if exists, else replace codeEl
+      const pre = codeEl.closest('pre');
+      if(pre) pre.parentNode.replaceChild(wrapper, pre);
+      else codeEl.parentNode.replaceChild(wrapper, codeEl);
+    }catch(e){
+      // if rendering fails, keep the code block and show error note
+      const errNote = document.createElement('div');
+      errNote.style.color = 'crimson';
+      errNote.style.fontSize = '0.9rem';
+      errNote.style.marginTop = '0.4rem';
+      errNote.textContent = 'Mermaid render error: ' + (e && e.message ? e.message : 'invalid diagram');
+      const pre = codeEl.closest('pre');
+      if(pre) pre.parentNode.insertBefore(errNote, pre.nextSibling);
+      else codeEl.parentNode.insertBefore(errNote, codeEl.nextSibling);
+      console.warn('Mermaid render failed', e);
+    }
+  }
+}
+
+/* -------------------------
    Breadcrumbs
-   clickable segments expand sidebar and optionally load note
    ------------------------- */
 function updateBreadcrumbs(path){
   if(!path){
@@ -448,15 +503,12 @@ function updateBreadcrumbs(path){
   parts.forEach((p, i) => {
     accum.push(p);
     const seg = accum.join('/');
-    const isFile = p.toLowerCase().endsWith('.md') || i === parts.length - 1 && p.includes('.');
     const label = p.replace(/\.md$/,'');
     const a = document.createElement('a');
     a.textContent = label;
     a.href = 'javascript:void(0)';
     a.addEventListener('click', () => {
-      // if clicking a folder segment, expand that path in sidebar
       expandPath(seg);
-      // if last segment is a file, load it
       if(seg.toLowerCase().endsWith('.md')) loadNote(seg);
     });
     breadcrumbsEl.appendChild(a);
@@ -471,21 +523,17 @@ function updateBreadcrumbs(path){
 
 /* Expand sidebar nodes matching a path (open branches along path) */
 function expandPath(path){
-  // path like "science/biology" or "science/biology/cells.md"
   const segments = path.split('/');
   let current = '';
   segments.forEach((seg, idx) => {
     current = current ? `${current}/${seg}` : seg;
-    // find branch element with data-path === current
     const branch = document.querySelector(`.branch[data-path="${current}"]`);
     if(branch){
       const children = branch.querySelector('.branch-children');
       if(children) children.classList.add('open');
     }
   });
-  // collapse other top-level branches for tidy view
   document.querySelectorAll('.branch-children').forEach(ch => {
-    // keep those that are ancestors of path open
     const parentBranch = ch.parentElement;
     if(parentBranch && parentBranch.dataset.path){
       const p = parentBranch.dataset.path;
@@ -499,14 +547,9 @@ function expandPath(path){
    ------------------------- */
 const RECENT_KEY = 'opennotes_recent';
 function getRecent(){
-  try{
-    const raw = localStorage.getItem(RECENT_KEY);
-    return raw ? JSON.parse(raw) : [];
-  }catch{ return []; }
+  try{ const raw = localStorage.getItem(RECENT_KEY); return raw ? JSON.parse(raw) : []; }catch{ return []; }
 }
-function saveRecent(list){
-  try{ localStorage.setItem(RECENT_KEY, JSON.stringify(list)); }catch{}
-}
+function saveRecent(list){ try{ localStorage.setItem(RECENT_KEY, JSON.stringify(list)); }catch{} }
 function addRecent(path){
   if(!path) return;
   const list = getRecent().filter(p => p !== path);
@@ -616,18 +659,14 @@ function createNotePlaceholder(){
     await buildIndex(tree);
     statusEl.textContent = `Ready · ${state.notesIndex.length} notes indexed`;
 
-    // render recent
     renderRecent();
 
-    // if URL has note param, load it; else show recent (already visible)
     const urlNote = getURLNote();
     if(urlNote){
-      // expand sidebar to show path
       expandPath(urlNote);
       await loadNote(urlNote);
     } else {
       currentPathEl.textContent = 'Recent';
-      // show recent section (already in DOM)
     }
   }catch(err){
     console.error(err);
