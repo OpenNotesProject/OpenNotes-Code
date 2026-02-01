@@ -185,6 +185,19 @@ async function loadNote(path){
     currentPathEl.textContent = path;
     noteContentEl.innerHTML = marked.parse(text);
 
+    // Render LaTeX (KaTeX auto-render) if available. Delimiters: $$...$$ (display) and $...$ (inline)
+    try{
+      if(window.renderMathInElement){
+        renderMathInElement(noteContentEl, {
+          delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+          ],
+          throwOnError: false
+        });
+      }
+    }catch(e){ console.warn('KaTeX render failed', e); }
+
     state.currentNote = { path, title, content: text };
 
     setURL(path);
