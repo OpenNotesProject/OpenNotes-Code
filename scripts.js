@@ -255,42 +255,50 @@ async function loadNote(path){
   }
 }
 
+
 /* -------------------------
    Mermaid rendering
    - finds <pre><code class="language-mermaid">...</code></pre>
    - replaces with rendered SVG using mermaid.mermaidAPI.render
    ------------------------- */
 let mermaidIdCounter = 0;
-async function renderAllMermaid(){
-  if(!window.mermaid || !mermaid.mermaidAPI) return;
-  const codeBlocks = noteContentEl.querySelectorAll('pre code.language-mermaid, code.language-mermaid');
-  for(const codeEl of codeBlocks){
-    const raw = codeEl.textContent || codeEl.innerText;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'mermaid-svg';
-    const id = 'mermaid-' + (++mermaidIdCounter);
-    try{
-      // mermaid.mermaidAPI.render returns svg string
-      const svg = mermaid.mermaidAPI.render(id, raw);
+/* -------------------------
+   Mermaid rendering (modern API)
+   ------------------------- */
+async function renderAllMermaid() {
+  if (!window.mermaid) return;
+
+  const blocks = noteContentEl.querySelectorAll(
+    'pre code.language-mermaid, code.language-mermaid'
+  );
+
+  for (const block of blocks) {
+    const code = block.textContent.trim();
+    const id = "mmd-" + Math.random().toString(36).slice(2);
+
+    try {
+      const { svg } = await mermaid.render(id, code);
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "mermaid-svg";
       wrapper.innerHTML = svg;
-      // replace the parent <pre> if exists, else replace codeEl
-      const pre = codeEl.closest('pre');
-      if(pre) pre.parentNode.replaceChild(wrapper, pre);
-      else codeEl.parentNode.replaceChild(wrapper, codeEl);
-    }catch(e){
-      // if rendering fails, keep the code block and show error note
-      const errNote = document.createElement('div');
-      errNote.style.color = 'crimson';
-      errNote.style.fontSize = '0.9rem';
-      errNote.style.marginTop = '0.4rem';
-      errNote.textContent = 'Mermaid render error: ' + (e && e.message ? e.message : 'invalid diagram');
-      const pre = codeEl.closest('pre');
-      if(pre) pre.parentNode.insertBefore(errNote, pre.nextSibling);
-      else codeEl.parentNode.insertBefore(errNote, codeEl.nextSibling);
-      console.warn('Mermaid render failed', e);
+
+      const pre = block.closest("pre");
+      if (pre) pre.replaceWith(wrapper);
+      else block.replaceWith(wrapper);
+
+    } catch (err) {
+      console.error("Mermaid render error:", err);
+
+      const errorBox = document.createElement("div");
+      errorBox.style.color = "crimson";
+      errorBox.style.margin = "0.5rem 0";
+      errorBox.textContent = "Mermaid diagram failed to render.";
+      block.closest("pre")?.after(errorBox);
     }
   }
 }
+
 
 /* -------------------------
    Breadcrumbs
