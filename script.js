@@ -173,10 +173,9 @@ function renderSubjects(tree){
 function processCallouts(container){
   const blockquotes = container.querySelectorAll('blockquote');
   blockquotes.forEach(bq => {
-    const firstChild = bq.firstChild;
-    if(!firstChild) return;
-    const text = firstChild.textContent || '';
-    const match = text.match(/^\[!(NOTE|WARNING|DANGER|ERROR|TIP|HINT|EXAMPLE|QUOTE|INFO|ABSTRACT|SUMMARY|BUG|FAILURE|SUCCESS)\]/i);
+    // Get all text from blockquote (handles nested p tags)
+    const bqText = bq.textContent || '';
+    const match = bqText.match(/^\[!(NOTE|WARNING|DANGER|ERROR|TIP|HINT|EXAMPLE|QUOTE|INFO|ABSTRACT|SUMMARY|BUG|FAILURE|SUCCESS)\]/i);
     if(!match) return;
     
     const type = match[1].toLowerCase();
@@ -196,7 +195,13 @@ function processCallouts(container){
     
     const contentDiv = document.createElement('div');
     contentDiv.className = 'callout-content';
-    contentDiv.innerHTML = bq.innerHTML.replace(/^\[!.*?\]\n?/, '');
+    // Remove [!TYPE] from the beginning of the first paragraph
+    const firstP = bq.querySelector('p');
+    if(firstP){
+      const pText = firstP.innerHTML;
+      firstP.innerHTML = pText.replace(/^\[!.*?\]\s*/, '');
+    }
+    contentDiv.innerHTML = bq.innerHTML;
     
     calloutDiv.appendChild(titleDiv);
     calloutDiv.appendChild(contentDiv);
