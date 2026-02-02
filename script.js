@@ -5,7 +5,10 @@ const CONFIG = {
   owner: "OpenNotesProject",
   repo: "Notes",
   branch: "main",
-  rootPath: "" // e.g. "notes"
+  rootPath: "", // e.g. "notes"
+  // OPTIONAL: for private repos or higher rate limits you can add a personal access token here for local testing.
+  // WARNING: embedding tokens in client-side code is insecure. Prefer a server-side proxy in production.
+  token: ''
 };
 
 /* -------------------------
@@ -69,11 +72,29 @@ function ghRawUrl(path){
 }
 
 /* -------------------------
+   GitHub fetch helper (adds optional token and surfaces API error messages)
+   ------------------------- */
+async function ghFetch(url, opts = {}){
+  const headers = Object.assign({}, opts.headers || {});
+  if(CONFIG.token) headers['Authorization'] = `token ${CONFIG.token}`;
+  const res = await fetch(url, Object.assign({}, opts, { headers }));
+  if(!res.ok){
+    let msg = `${res.status} ${res.statusText} - ${url}`;
+    try{
+      const body = await res.json();
+      if(body && body.message) msg += `: ${body.message}`;
+    }catch(e){}
+    throw new Error(`GitHub fetch failed: ${msg}`);
+  }
+  return res;
+}
+
+/* -------------------------
    Fetch tree recursively
    ------------------------- */
 async function fetchTree(path=''){
-  const res = await fetch(ghContentsUrl(path));
-  if(!res.ok) throw new Error('GitHub fetch failed: ' + res.status);
+  const url = ghContentsUrl(path);
+  const res = await ghFetch(url);
   const items = await res.json();
   const folders = {};
   const files = [];
@@ -168,44 +189,90 @@ function renderSubjects(tree){
 
 /* -------------------------
    Process callouts (Obsidian-style > [!TYPE])
-   Converts blockquotes starting with [!TYPE] into styled callout divs
+   Converts blockquotes or any block-level element starting with [!TYPE] into styled callout divs
    ------------------------- */
 function processCallouts(container){
-  const blockquotes = container.querySelectorAll('blockquote');
-  blockquotes.forEach(bq => {
-    // Get all text from blockquote (handles nested p tags)
-    const bqText = bq.textContent || '';
-    const match = bqText.match(/^\[!(NOTE|WARNING|DANGER|ERROR|TIP|HINT|EXAMPLE|QUOTE|INFO|ABSTRACT|SUMMARY|BUG|FAILURE|SUCCESS)\]/i);
-    if(!match) return;
-    
-    const type = match[1].toLowerCase();
+  // Icons for common types (unknown types use a default)
+  const icons = {
+    note: '📝', warning: '⚠️', danger: '🚨', error: '❌', tip: '💡', hint: '💡',
+    example: '📋', quote: '💬', info: 'ℹ️', abstract: '📋', summary: '📋',
+    bug: '🐛', failure: '❌', success: '✅'
+  };
+
+  function sanitizeType(raw){
+    return raw.toLowerCase().trim().replace(/[^a-z0-9_-]+/g,'-');
+  }
+  function displayTitle(raw){
+    raw = raw.trim();
+    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  }
+
+  function removeMarkerFromNode(node){
+    if(!node) return false;
+    // Text node
+    if(node.nodeType === Node.TEXT_NODE){
+      const txt = node.nodeValue || '';
+      if(/^\s*\[!.+?\]\s*/i.test(txt)){
+        node.nodeValue = txt.replace(/^\s*\[!.+?\]\s*/i, '');
+        return true;
+      }
+      return false;
+    }
+    // Element node: check children in order
+    if(node.nodeType === Node.ELEMENT_NODE){
+      const children = Array.from(node.childNodes);
+      for(const child of children){
+        if(removeMarkerFromNode(child)){
+          // remove empty elements left behind
+          if(child.nodeType === Node.ELEMENT_NODE && !child.textContent.trim()) child.remove();
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Helper to build callout and replace an element
+  function makeCalloutFor(el, typeRaw){
+    const type = sanitizeType(typeRaw);
     const calloutDiv = document.createElement('div');
     calloutDiv.className = `callout ${type}`;
-    
-    // Icons for each type
-    const icons = {
-      note: '📝', warning: '⚠️', danger: '🚨', error: '❌', tip: '💡', hint: '💡',
-      example: '📋', quote: '💬', info: 'ℹ️', abstract: '📋', summary: '📋',
-      bug: '🐛', failure: '❌', success: '✅'
-    };
-    
+
     const titleDiv = document.createElement('div');
     titleDiv.className = 'callout-title';
-    titleDiv.innerHTML = `<span class="callout-icon">${icons[type] || '📌'}</span><span>${type.charAt(0).toUpperCase() + type.slice(1)}</span>`;
-    
+    titleDiv.innerHTML = `<span class="callout-icon">${icons[type] || '📌'}</span><span>${displayTitle(typeRaw)}</span>`;
+
+    // Remove marker from the element/content
+    removeMarkerFromNode(el);
+
     const contentDiv = document.createElement('div');
     contentDiv.className = 'callout-content';
-    // Remove [!TYPE] from the beginning of the first paragraph
-    const firstP = bq.querySelector('p');
-    if(firstP){
-      const pText = firstP.innerHTML;
-      firstP.innerHTML = pText.replace(/^\[!.*?\]\s*/, '');
-    }
-    contentDiv.innerHTML = bq.innerHTML;
-    
+    contentDiv.innerHTML = el.innerHTML;
+
     calloutDiv.appendChild(titleDiv);
     calloutDiv.appendChild(contentDiv);
-    bq.parentNode.replaceChild(calloutDiv, bq);
+
+    el.parentNode.replaceChild(calloutDiv, el);
+  }
+
+  // 1) Process blockquotes (standard markdown '>' -> <blockquote>)
+  const blockquotes = Array.from(container.querySelectorAll('blockquote'));
+  blockquotes.forEach(bq => {
+    const bqText = bq.textContent || '';
+    const match = bqText.match(/^\s*\[!(.+?)\]/i);
+    if(!match) return;
+    makeCalloutFor(bq, match[1]);
+  });
+
+  // 2) Also process other block-level elements that may contain the marker (robustness)
+  const blockTags = ['p','div','li','pre','section','article','figure','aside','header','footer'];
+  const candidates = Array.from(container.querySelectorAll(blockTags.join(',')));
+  candidates.forEach(el => {
+    if(el.closest('blockquote')) return; // already handled
+    const txt = el.textContent || '';
+    const match = txt.match(/^\s*\[!(.+?)\]/i);
+    if(!match) return;
+    makeCalloutFor(el, match[1]);
   });
 }
 
@@ -215,8 +282,7 @@ function processCallouts(container){
 async function loadNote(path){
   try{
     statusEl.textContent = 'Loading…';
-    const res = await fetch(ghRawUrl(path));
-    if(!res.ok) throw new Error('Failed to load note');
+    const res = await ghFetch(ghRawUrl(path));
     const text = await res.text();
 
     const title = path.split('/').pop().replace(/\.md$/,'');
@@ -488,6 +554,6 @@ function createNotePlaceholder(){
   }catch(err){
     console.error(err);
     statusEl.textContent = 'Error loading vault';
-    noteContentEl.innerHTML = `<p style="color:var(--muted)">Could not load repository. Check CONFIG and that the repo is public.</p>`;
+    noteContentEl.innerHTML = `<p style="color:var(--muted)">Could not load repository. Check <code>CONFIG</code>, that the repo is public, and that the branch exists. Error: ${err.message}</p>`;
   }
 })();
